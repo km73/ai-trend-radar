@@ -4,6 +4,8 @@
 """
 
 import asyncio
+import hashlib
+import hmac
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -13,12 +15,99 @@ from fastapi import FastAPI, Query, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 import db
 import scraper
 import scorer
 import translator
 from seed_data import SEED_ARTICLES
+
+
+# ===================================================================
+# 门禁(Gate): 访问站点需输入密码 "Anson2026"
+# 实现: 中间件校验签名 Cookie；未登录返回登录页；
+#       /api/health 与 /api/login 对公网健康检查和登录放开。
+# ===================================================================
+GATE_PASSWORD = os.environ.get("GATE_PASSWORD", "Anson2026")
+GATE_SECRET = os.environ.get("GATE_SECRET", "ai-radar-gate-secret-2026")
+AUTH_COOKIE = "radar_auth"
+
+
+def _make_token() -> str:
+    return hmac.new(GATE_SECRET.encode(), b"authed", hashlib.sha256).hexdigest()
+
+
+def _verify_token(tok: str) -> bool:
+    return hmac.compare_digest(tok or "", _make_token())
+
+
+LOGIN_HTML = """<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>全球AI热点雷达 · 访问验证</title>
+<style>
+  :root{--bg:#0d0f12;--surface:#15181d;--fg:#f2f4f7;--muted:#8b93a1;--accent:#39ff14;--line:#262b33}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(1200px 600px at 50% -10%,#16241a 0%,var(--bg) 60%);
+    font-family:'Archivo',system-ui,'PingFang SC','Microsoft YaHei',sans-serif;color:var(--fg)}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:20px;
+    padding:44px 40px;width:min(92vw,400px);box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  h1{font-size:34px;font-weight:800;letter-spacing:-.02em;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:13px;letter-spacing:.18em;text-transform:uppercase;margin-bottom:28px}
+  label{display:block;font-size:13px;color:var(--muted);margin-bottom:8px}
+  input{width:100%;padding:14px 16px;font-size:16px;border-radius:12px;border:1px solid var(--line);
+    background:#0f1216;color:var(--fg);outline:none}
+  input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(57,255,20,.15)}
+  button{margin-top:18px;width:100%;padding:14px;border:0;border-radius:12px;cursor:pointer;
+    background:var(--accent);color:#06210a;font-weight:800;font-size:15px;letter-spacing:.04em;
+    transition:transform .12s ease,filter .12s ease}
+  button:hover{filter:brightness(1.08)}
+  button:active{transform:translateY(1px)}
+  .err{color:#ff6b6b;font-size:13px;min-height:18px;margin-top:12px}
+</style></head>
+<body><div class="card">
+  <h1>全球AI热点雷达</h1>
+  <div class="sub">ACCESS GATE · 访问验证</div>
+  <label for="pw">请输入访问密码</label>
+  <input id="pw" type="password" autocomplete="current-password" placeholder="密码" autofocus>
+  <button id="btn">进入</button>
+  <div class="err" id="err"></div>
+</div>
+<script>
+  const pw=document.getElementById('pw'),btn=document.getElementById('btn'),err=document.getElementById('err');
+  async function login(){
+    err.textContent='';
+    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({password:pw.value})});
+    if(r.ok){location.href='/';}
+    else{const d=await r.json().catch(()=>({}));err.textContent=d.detail||d.error||'密码错误';}
+  }
+  btn.onclick=login;
+  pw.addEventListener('keydown',e=>{if(e.key==='Enter')login();});
+</script>
+</body></html>"""
+
+
+class GateMiddleware(BaseHTTPMiddleware):
+    """未登录访问受保护资源时: API 返回 401, 页面返回登录页。"""
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        # 公开路径: 健康检查、登录/登出、静态资源、favicon
+        if (path.startswith("/static") or path in ("/api/health", "/api/login", "/api/logout")
+                or path == "/favicon.ico"):
+            return await call_next(request)
+        # 已登录放行
+        if _verify_token(request.cookies.get(AUTH_COOKIE)):
+            return await call_next(request)
+        # 未登录
+        if path.startswith("/api/"):
+            return JSONResponse({"error": "unauthorized", "message": "需要访问密码"},
+                                status_code=401)
+        return HTMLResponse(LOGIN_HTML)
 
 
 async def _translate_new_only(articles: list) -> int:
@@ -124,6 +213,39 @@ app = FastAPI(title="全球AI热点雷达", lifespan=lifespan)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+
+# 门禁中间件(必须在路由注册之后、请求处理之前挂载)
+app.add_middleware(GateMiddleware)
+
+
+@app.post("/api/login")
+async def api_login(request: Request):
+    """校验访问密码，成功则下发签名 Cookie。"""
+    try:
+        body = await request.json()
+        pw = (body or {}).get("password", "")
+    except Exception:
+        pw = ""
+    if not hmac.compare_digest(pw, GATE_PASSWORD):
+        return JSONResponse({"error": "invalid_password", "message": "密码错误"},
+                            status_code=401)
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(
+        AUTH_COOKIE, _make_token(),
+        httponly=True, samesite="lax",
+        secure=os.environ.get("RENDER") is not None,
+        max_age=60 * 60 * 24 * 30,  # 30 天
+        path="/",
+    )
+    return resp
+
+
+@app.post("/api/logout")
+async def api_logout():
+    """清除访问 Cookie。"""
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(AUTH_COOKIE, path="/")
+    return resp
 
 
 @app.get("/", response_class=HTMLResponse)
