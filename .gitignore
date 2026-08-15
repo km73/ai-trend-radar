@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.sqlite
+server.log
+tunnel.log
+.codebuddy/
+*.egg-info/
+.venv/
+venv/
+.DS_Store
+全球AI热点雷达_*.md

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>全球AI热点雷达 | Global AI Trend Radar</title>
+    <!-- DESIGN·TANG tokens (drop-in) -->
+    <link rel="stylesheet" href="/static/tokens.css">
+    <!-- Component layer (token-driven) -->
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Fonts per tokens.css spec: Archivo + JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- a11y: skip-to-content -->
+    <a href="#main" class="skip-link">跳至主要内容</a>
+
+    <!-- Theme toggle -->
+    <button class="theme-toggle focus-haloed" id="themeToggle" aria-label="切换亮色/暗色主题">
+        <span class="icon-sun">☀</span>
+        <span class="icon-moon">🌙</span>
+    </button>
+
+    <header class="hero">
+        <div class="hero-inner">
+            <h1 class="hero-title t-display-l">全球AI热点雷达</h1>
+            <p class="hero-sub t-label-m">GLOBAL AI TREND RADAR · 实时扫描 · 热度排序 · 智能过滤</p>
+            <div class="stats-bar" id="statsBar">
+                <div class="stat" data-numeric>
+                    <span class="stat-num" id="statTotal">—</span>
+                    <span class="stat-label">总条目</span>
+                </div>
+                <div class="stat" data-numeric>
+                    <span class="stat-num" id="statNews">—</span>
+                    <span class="stat-label">新闻</span>
+                </div>
+                <div class="stat" data-numeric>
+                    <span class="stat-num" id="statCommentary">—</span>
+                    <span class="stat-label">评论</span>
+                </div>
+                <div class="stat" data-numeric>
+                    <span class="stat-num" id="statSocial">—</span>
+                    <span class="stat-label">社交</span>
+                </div>
+                <div class="stat" data-numeric>
+                    <span class="stat-num" id="statVideo">—</span>
+                    <span class="stat-label">视频</span>
+                </div>
+                <div class="stat" data-numeric>
+                    <span class="stat-num" id="statTranslated">—</span>
+                    <span class="stat-label">已中文化</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-num" id="statRefresh" style="font-size:0.72rem;">—</span>
+                    <span class="stat-label">刷新时间</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <nav class="controls" aria-label="筛选控制">
+        <div class="controls-inner">
+            <div class="search-wrap">
+                <input type="text" id="searchInput" placeholder="搜索关键词、标题、来源..." class="search-input t-body-l focus-haloed" aria-label="搜索">
+                <span class="search-icon">⌕</span>
+            </div>
+            <div class="filter-group">
+                <label class="t-label-m">话题</label>
+                <div class="chips" role="group" aria-label="话题过滤" id="tagChips">
+                    <button class="chip state t-label-l" data-tag="all" aria-pressed="true">全部</button>
+                    <button class="chip state t-label-l" data-tag="AI" aria-pressed="false">AI</button>
+                    <button class="chip state t-label-l" data-tag="HR" aria-pressed="false">HR</button>
+                    <button class="chip state t-label-l" data-tag="HR服务" aria-pressed="false">HR服务</button>
+                </div>
+            </div>
+            <div class="filter-group">
+                <label class="t-label-m">类型</label>
+                <div class="chips" role="group" aria-label="类型过滤" id="catChips">
+                    <button class="chip state t-label-l" data-cat="all" aria-pressed="true">全部</button>
+                    <button class="chip state t-label-l" data-cat="news" aria-pressed="false">新闻</button>
+                    <button class="chip state t-label-l" data-cat="commentary" aria-pressed="false">评论</button>
+                    <button class="chip state t-label-l" data-cat="social" aria-pressed="false">社交</button>
+                    <button class="chip state t-label-l" data-cat="video" aria-pressed="false">视频</button>
+                </div>
+            </div>
+            <div class="filter-group">
+                <label class="t-label-m">排序</label>
+                <div class="chips" role="group" aria-label="排序方式" id="sortChips">
+                    <button class="chip state t-label-l" data-sort="hot" aria-pressed="true">热度</button>
+                    <button class="chip state t-label-l" data-sort="time" aria-pressed="false">最新</button>
+                    <button class="chip state t-label-l" data-sort="views" aria-pressed="false">浏览</button>
+                </div>
+            </div>
+            <button class="refresh-btn state focus-haloed" id="refreshBtn" aria-label="刷新数据">
+                <span class="refresh-icon">⟳</span> 刷新数据
+            </button>
+        </div>
+    </nav>
+
+    <main id="main" tabindex="-1" class="main">
+        <div class="result-bar">
+            <span id="resultCount" class="t-body-m">加载中...</span>
+            <span class="legend">
+                <span class="leg level-5-hot">🔥 极热</span>
+                <span class="leg level-4-hot">🔴 高热</span>
+                <span class="leg level-3-hot">🟠 中热</span>
+                <span class="leg level-2-hot">🟡 微热</span>
+                <span class="leg level-1-hot">🟢 冷门</span>
+            </span>
+        </div>
+        <div class="grid" id="grid">
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+        </div>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <footer class="footer">
+        <div class="t-label-m">全球AI热点雷达 · 数据源: HN / Reddit / RSS / GitHub / 种子库 · 热度算法: Base × RecencyDecay + DomainWeight</div>
+    </footer>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# Render.com 部署蓝图 (Blueprint)
+# 用法: 也可在 Render 控制台用 "New + Blueprint" 直接导入本仓库
+services:
+  - type: web
+    name: ai-trend-radar
+    runtime: python
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: PYTHONUNBUFFERED
+        value: "1"

@@ -1,0 +1,169 @@
+/* =============================================================================
+   DESIGN·TANG — Design Tokens (drop-in)
+   Intelligence-grade, M3-architected dark/light design system.
+   Dark is the DEFAULT (:root). Light activates on  <html data-theme="light">.
+   Usage:  <link rel="stylesheet" href="tokens.css">  then reference var(--token).
+   RULE: never hardcode hex in components — always go through a token so theme
+         switching and the SVG diagrams keep working.
+   ============================================================================= */
+
+:root{
+  color-scheme: dark;
+
+  /* — base surfaces / containers — */
+  --bg:#08080a;
+  --surf-lowest:#060608; --surf-low:#0d0d10; --surface:#111114; --surf-high:#1a1a1f; --surf-highest:#222229;
+  --surface-variant:#1a1a1f; --on-surface-variant:#b6b6bc;
+
+  /* — foreground (fg → fg-dim → fg-mute = 3-step legible greyscale, all ≥AA) — */
+  --fg:#f2f2f0; --fg-dim:#9a9aa0; --fg-mute:#82828c; --on-surface:#f2f2f0;
+
+  /* — lines / outlines — */
+  --line:rgba(242,242,240,.10); --line-strong:rgba(242,242,240,.22);
+  --outline:#5b5b63; --outline-variant:#2c2c33;
+
+  /* — M3 COLOR ROLES (each: base / on / container / on-container) — */
+  --primary:#4c7dff;   --on-primary:#ffffff;   --primary-container:#18294f;   --on-primary-container:#c9d6ff;
+  --secondary:#3fb6a8; --on-secondary:#042420; --secondary-container:#0f3b35; --on-secondary-container:#b8e8e0;
+  --tertiary:#d99a3c;  --on-tertiary:#271900;  --tertiary-container:#46330f;  --on-tertiary-container:#f3d9a6;
+  --error:#e5614c;     --on-error:#2e0a05;     --error-container:#4a1810;     --on-error-container:#f6cabf;
+  --inverse-surface:#e6e6e3; --inverse-on-surface:#16161a; --inverse-primary:#2c4aa0;
+  /* semantic aliases — DO use these for meaning, they follow the roles */
+  --accent:var(--primary); --ok:var(--secondary); --warn:var(--tertiary); --crit:var(--error);
+
+  /* — AI accent: reserved for AI reasoning / chain-of-thought ONLY — */
+  --ai:#7b68ee; --ai-on:#b8a9ff; --ai-container:rgba(123,104,238,.16);
+
+  /* — SHAPE scale — */
+  --shape-none:0; --shape-xs:4px; --shape-sm:8px; --shape-md:12px; --shape-lg:16px; --shape-xl:28px; --shape-full:999px;
+
+  /* — STATE LAYER opacities (apply as a currentColor overlay, see .state) — */
+  --state-hover:.08; --state-focus:.10; --state-press:.12; --state-drag:.16;
+
+  /* — ELEVATION (dark = stronger shadow) — */
+  --elev-0:none;
+  --elev-1:0 1px 2px rgba(0,0,0,.55), 0 1px 1px rgba(0,0,0,.4);
+  --elev-2:0 1px 3px rgba(0,0,0,.55), 0 3px 8px rgba(0,0,0,.42);
+  --elev-3:0 4px 10px rgba(0,0,0,.55), 0 1px 3px rgba(0,0,0,.4);
+  --elev-4:0 7px 16px rgba(0,0,0,.58), 0 2px 5px rgba(0,0,0,.42);
+  --elev-5:0 10px 26px rgba(0,0,0,.62), 0 4px 9px rgba(0,0,0,.44);
+
+  /* — MOTION · M3 easing + durations — */
+  --ease-standard:cubic-bezier(.2,0,0,1);
+  --ease-decel:cubic-bezier(0,0,0,1);
+  --ease-accel:cubic-bezier(.3,0,1,1);
+  --ease-emph:cubic-bezier(.2,0,0,1);
+  --ease-emph-decel:cubic-bezier(.05,.7,.1,1);
+  --ease-emph-accel:cubic-bezier(.3,0,.8,.15);
+  --dur-1:100ms; --dur-2:200ms; --dur-3:300ms; --dur-4:400ms; --dur-5:600ms;
+
+  /* — MOTION · SPRING presets (overshoot beziers ≈ physical springs) —
+     RULE: layout/position changes use a spring. NEVER `transition: all .3s ease`. */
+  --spring-snappy:cubic-bezier(.34,1.36,.5,1);   /* hover / select / toggles    */
+  --spring-gentle:cubic-bezier(.22,1,.32,1);     /* content + AI reveal / fade-in */
+  --spring-layout:cubic-bezier(.33,1.22,.4,1);   /* panel slide / resize         */
+  --spring-modal:cubic-bezier(.3,1.2,.42,1);     /* modal / focus enter          */
+
+  /* — TYPE families — */
+  --sans:"Archivo","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,monospace;
+
+  /* — SPACE (4px base) — */
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px; --s8:64px; --s9:96px;
+
+  /* — LAYOUT — */
+  --sidebar:252px; --maxw:1180px; --grid:64px;
+
+  /* — DIAGRAM tokens (theme-flippable; use in SVG fill/stroke so charts retheme) — */
+  --d-stroke:#3a3a40; --d-node:#0f0f12; --d-node2:#16161a;
+}
+
+/* =============================== LIGHT THEME =============================== */
+html[data-theme="light"]{
+  color-scheme: light;
+  --bg:#eceef1;
+  --surf-lowest:#ffffff; --surf-low:#f3f4f6; --surface:#ffffff; --surf-high:#e8eaed; --surf-highest:#e0e3e7;
+  --surface-variant:#e6e8ec; --on-surface-variant:#44464e;
+  --fg:#15161a; --fg-dim:#474952; --fg-mute:#6a6c76; --on-surface:#15161a;
+  --line:rgba(15,17,24,.12); --line-strong:rgba(15,17,24,.22);
+  --outline:#8b8d96; --outline-variant:#c7c9d0;
+  --primary:#2f55c8;   --on-primary:#ffffff;   --primary-container:#dde3ff;   --on-primary-container:#0a1b4d;
+  --secondary:#0f6d62; --on-secondary:#ffffff; --secondary-container:#bdeee6; --on-secondary-container:#00201c;
+  --tertiary:#7c5410;  --on-tertiary:#ffffff;  --tertiary-container:#ffdfae;  --on-tertiary-container:#281800;
+  --error:#b3261e;     --on-error:#ffffff;     --error-container:#f9dedc;     --on-error-container:#410e0b;
+  --inverse-surface:#2e2f33; --inverse-on-surface:#f1f1f3; --inverse-primary:#adc2ff;
+  --elev-1:0 1px 2px rgba(20,22,30,.10), 0 1px 1px rgba(20,22,30,.06);
+  --elev-2:0 1px 3px rgba(20,22,30,.12), 0 4px 8px rgba(20,22,30,.07);
+  --elev-3:0 4px 10px rgba(20,22,30,.12), 0 1px 3px rgba(20,22,30,.08);
+  --elev-4:0 7px 16px rgba(20,22,30,.14), 0 2px 5px rgba(20,22,30,.08);
+  --elev-5:0 10px 26px rgba(20,22,30,.16), 0 4px 9px rgba(20,22,30,.10);
+  --d-stroke:#c8c9cf; --d-node:#ffffff; --d-node2:#f3f4f6;
+  --ai:#6a4fe0; --ai-on:#5a45c0; --ai-container:rgba(106,79,224,.10);
+}
+
+/* theme cross-fade */
+html{ transition:background-color .3s var(--ease-standard); }
+body{ transition:background-color .3s var(--ease-standard), color .3s var(--ease-standard);
+      background:var(--bg); color:var(--fg); font-family:var(--sans); }
+
+/* =============================================================================
+   TYPE SCALE (15 steps). Apply as classes, e.g. <h2 class="t-headline-m">.
+   ============================================================================= */
+.t-display-l{ font-weight:800; font-size:clamp(2.6rem,6vw,3.5rem); line-height:1.04; letter-spacing:-.03em; }
+.t-display-m{ font-weight:700; font-size:clamp(2.1rem,4.6vw,2.8rem); line-height:1.08; letter-spacing:-.02em; }
+.t-display-s{ font-weight:700; font-size:2.25rem; line-height:1.16; letter-spacing:-.015em; }
+.t-headline-l{ font-weight:700; font-size:2rem; line-height:1.2; letter-spacing:-.01em; }
+.t-headline-m{ font-weight:600; font-size:1.75rem; line-height:1.24; letter-spacing:-.01em; }
+.t-headline-s{ font-weight:600; font-size:1.5rem; line-height:1.3; letter-spacing:-.005em; }
+.t-title-l{ font-weight:600; font-size:1.375rem; line-height:1.28; }
+.t-title-m{ font-weight:600; font-size:1rem; line-height:1.5; letter-spacing:.01em; }
+.t-title-s{ font-weight:600; font-size:.875rem; line-height:1.43; letter-spacing:.006em; }
+.t-body-l{ font-weight:400; font-size:1rem; line-height:1.5; letter-spacing:.005em; color:var(--fg-dim); }
+.t-body-m{ font-weight:400; font-size:.875rem; line-height:1.45; color:var(--fg-dim); }
+.t-body-s{ font-weight:400; font-size:.75rem; line-height:1.4; color:var(--fg-mute); }
+.t-label-l{ font-family:var(--mono); font-weight:500; font-size:.78rem; letter-spacing:.08em; }
+.t-label-m{ font-family:var(--mono); font-weight:500; font-size:.7rem; letter-spacing:.14em; text-transform:uppercase; }
+.t-label-s{ font-family:var(--mono); font-weight:500; font-size:.64rem; letter-spacing:.16em; text-transform:uppercase; }
+
+/* =============================================================================
+   M3 STATE LAYER — put `.state` on any interactive element for the hover/press
+   tonal overlay (uses currentColor so it adapts to the element's text colour).
+   ============================================================================= */
+.state{ position:relative; isolation:isolate; }
+.state::after{ content:""; position:absolute; inset:0; background:currentColor; opacity:0;
+  transition:opacity var(--dur-1) var(--ease-standard); pointer-events:none; border-radius:inherit; }
+.state:hover::after{ opacity:var(--state-hover); }
+.state:active::after{ opacity:var(--state-press); }
+
+/* =============================================================================
+   PRODUCTION BASELINES — ship these. (a11y + native integration)
+   ============================================================================= */
+
+/* tabular figures so data columns align (KPIs, ids, %, timestamps) */
+.mono,table,[data-numeric]{ font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1; }
+
+/* selection */
+::selection{ background:var(--primary); color:var(--on-primary); }
+
+/* focus-visible: two-layer ring that survives coloured + clipped backgrounds.
+   Use inset (-2px offset) for rows/nodes that sit inside overflow:hidden scrollers. */
+:where(a,button,[tabindex],input,select,summary):focus-visible{ outline:2px solid var(--primary); outline-offset:2px; }
+.focus-haloed:focus-visible{ outline:2px solid var(--primary); outline-offset:2px; box-shadow:0 0 0 4px var(--bg); }
+.focus-inset:focus-visible{ outline:2px solid var(--primary); outline-offset:-2px; }
+
+/* themed scrollbars */
+*{ scrollbar-width:thin; scrollbar-color:var(--outline-variant) transparent; }
+::-webkit-scrollbar{ width:11px; height:11px; }
+::-webkit-scrollbar-track{ background:transparent; }
+::-webkit-scrollbar-thumb{ background:var(--outline-variant); border-radius:99px; border:3px solid transparent; background-clip:content-box; }
+::-webkit-scrollbar-thumb:hover{ background:var(--outline); border:3px solid transparent; background-clip:content-box; }
+
+/* comfortable hit targets */
+button, .btn{ min-height:34px; }
+
+/* REDUCED MOTION — neutralises spring transitions, transforms, focus scale,
+   spinners and the typewriter caret. (Also gate JS-driven motion: see AGENTS.md.) */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{ animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; }
+  html{ scroll-behavior:auto !important; }
+}
