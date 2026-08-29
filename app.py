@@ -169,7 +169,7 @@ async def background_refresh(initial_backfill: bool = False):
     """
     常驻后台任务：
       1) 启动时先回填历史英文文章翻译
-      2) 立即抓取一轮
+      2) 立即抓取一轮（先落库，保证内容即时可见）
       3) 之后每 REFRESH_INTERVAL_MIN 分钟抓取一轮，并周期性重试漏译文章
     任何一轮异常都不影响后续轮次。
     """
@@ -182,8 +182,11 @@ async def background_refresh(initial_backfill: bool = False):
         except Exception as e:
             print(f"[App] 初始回填失败: {e}")
 
-    # 立即跑一轮抓取
-    await do_refresh()
+    # 立即跑一轮抓取（独立 try，失败不影响后续周期）
+    try:
+        await do_refresh()
+    except Exception as e:
+        print(f"[App] 首轮抓取失败: {e}")
 
     cycle = 0
     while True:
@@ -198,17 +201,18 @@ async def background_refresh(initial_backfill: bool = False):
 
 
 async def do_refresh() -> int:
-    """抓取一轮 + 翻译新增 + 落库。返回入库条数。"""
+    """
+    抓取一轮并立即落库（英文原文先行可见，翻译由后台渐进补齐）。
+    返回入库条数。翻译绝不在请求路径上同步执行。
+    """
     result = await scraper.fetch_all_sources()
     if not result.get("articles"):
         print("[App] 本轮未抓到内容")
         return 0
     scored = scorer.score_all_articles(result["articles"])
-    # 仅翻译新增（DB 不存在的）文章
-    await _translate_new_only(scored)
     db.bulk_upsert(scored)
     db.set_meta("last_refresh", datetime.now(timezone.utc).isoformat())
-    print(f"[App] 抓取完成: 处理 {len(scored)} 条")
+    print(f"[App] 抓取完成: 入库 {len(scored)} 条")
     return len(scored)
 
 
@@ -328,27 +332,22 @@ async def api_stats():
 @app.post("/api/refresh")
 async def api_refresh(background_tasks: BackgroundTasks):
     """
-    手动触发抓取刷新。
-    新抓取的英文文章自动翻译为中文；已存在文章保留历史翻译，仅更新热度指标。
+    手动触发抓取刷新（后台执行，立即返回）。
+    新文章先落库立即可见，翻译随后渐进补齐。
     """
-    result = await scraper.fetch_all_sources()
-    translated_count = 0
-    if result["articles"]:
-        scored = scorer.score_all_articles(result["articles"])
-        translated_count = await _translate_new_only(scored)
-        db.bulk_upsert(scored)
-        db.set_meta("last_refresh", datetime.now(timezone.utc).isoformat())
+    async def refresh_and_translate():
+        try:
+            await do_refresh()
+            await backfill_translations(limit=TRANSLATE_BATCH_LIMIT)
+        except Exception as e:
+            print(f"[App] 手动刷新失败: {e}")
 
-    total = db.count_all()
+    background_tasks.add_task(refresh_and_translate)
     stats = db.get_stats()
     return {
-        "status": "ok",
-        "new_articles": result["after_dedup"],
-        "translated": translated_count,
-        "total_now": total,
+        "status": "started",
+        "message": "已触发抓取+翻译，后台执行中",
         "translated_total": stats.get("translated", 0),
-        "elapsed_seconds": result["elapsed_seconds"],
-        "source_stats": result["source_stats"],
         "last_refresh": stats.get("last_refresh"),
     }
 

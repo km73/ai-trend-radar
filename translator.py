@@ -33,6 +33,11 @@ MYMEMORY_URL = "https://api.mymemory.translated.net/get"
 # 单次翻译的最大尝试轮数（每轮会依次试 Google -> MyMemory）
 MAX_ATTEMPTS = int(os.environ.get("TRANSLATE_ATTEMPTS", "3"))
 
+# 熔断器：某个源连续被限流时，冷却期间直接跳过，避免反复撞墙浪费时间。
+# source -> 冷却截止时间戳(monotonic)
+_source_cooldown: dict = {}
+SOURCE_COOLDOWN_SEC = int(os.environ.get("TRANSLATE_COOLDOWN_SEC", "60"))
+
 
 class TransientError(Exception):
     """可重试错误（限流/超时/5xx），不应把文章标记为"已处理"。"""
@@ -73,7 +78,8 @@ async def _translate_google(client: httpx.AsyncClient, text: str,
     return "".join(parts).strip() or None
 
 
-async def _translate_mymemory(client: httpx.AsyncClient, text: str) -> Optional[str]:
+async def _translate_mymemory(client: httpx.AsyncClient, text: str,
+                              target: str = "zh-CN") -> Optional[str]:
     params = {"q": text, "langpair": "en|zh-CN"}
     resp = await client.get(MYMEMORY_URL, params=params, timeout=12)
     if resp.status_code == 429 or resp.status_code >= 500:
@@ -91,11 +97,22 @@ async def _translate_mymemory(client: httpx.AsyncClient, text: str) -> Optional[
     return None
 
 
+def _source_open(name: str) -> bool:
+    """判断源是否处于可用状态（未触发冷却）"""
+    return time.monotonic() >= _source_cooldown.get(name, 0.0)
+
+
+def _open_circuit(name: str):
+    """源连续失败时打开熔断，冷却 SOURCE_COOLDOWN_SEC 秒"""
+    _source_cooldown[name] = time.monotonic() + SOURCE_COOLDOWN_SEC
+
+
 async def translate_text(client: httpx.AsyncClient, text: str,
                          target: str = "zh-CN") -> str:
     """
     翻译单段文本为中文。已是中文则原样返回。
     失败(限流/超时)时退避重试，全部轮次失败才返回原文。
+    每个源独立熔断：被限流后冷却期内跳过，给限流窗口恢复时间。
     """
     if not text or not text.strip():
         return text
@@ -109,16 +126,19 @@ async def translate_text(client: httpx.AsyncClient, text: str,
     result = None
     async with _SEMAPHORE:
         for attempt in range(MAX_ATTEMPTS):
-            # 每轮依次尝试主源 / 备源
+            # 每轮依次尝试未熔断的源（主源 Google -> 备源 MyMemory）
             for name, fn in (("google", _translate_google),
                              ("mymemory", _translate_mymemory)):
+                if not _source_open(name):
+                    continue
                 try:
                     r = await fn(client, text, target)
                     if r and r.strip():
                         result = r
                         break
                 except TransientError as e:
-                    print(f"[Translator] {name} 暂时不可用({e})，第 {attempt + 1} 轮")
+                    print(f"[Translator] {name} 暂时不可用({e})，熔断 {SOURCE_COOLDOWN_SEC}s")
+                    _open_circuit(name)
                 except Exception as e:
                     print(f"[Translator] {name} 翻译异常: {e}")
             if result:
