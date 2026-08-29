@@ -10,6 +10,8 @@
 """
 
 import asyncio
+import os
+import random
 import re
 import time
 from typing import Optional
@@ -21,11 +23,19 @@ _CACHE: dict = {}
 # 已翻译 URL 集合（跨次刷新避免重译）
 _DONE_URLS: set = set()
 
-# 并发限流：Google 非官方端点对短文本较宽容，6 并发 + 小延迟较稳
-_SEMAPHORE = asyncio.Semaphore(6)
+# 并发限流：Google 非官方端点对短文本较宽容，但仍会 429。
+# 3 并发 + 批间退避，成功率显著高于 6 并发猛冲。
+_SEMAPHORE = asyncio.Semaphore(3)
 
 GOOGLE_URL = "https://translate.googleapis.com/translate_a/single"
 MYMEMORY_URL = "https://api.mymemory.translated.net/get"
+
+# 单次翻译的最大尝试轮数（每轮会依次试 Google -> MyMemory）
+MAX_ATTEMPTS = int(os.environ.get("TRANSLATE_ATTEMPTS", "3"))
+
+
+class TransientError(Exception):
+    """可重试错误（限流/超时/5xx），不应把文章标记为"已处理"。"""
 
 
 def is_mostly_chinese(text: str) -> bool:
@@ -48,41 +58,45 @@ def has_chinese(text: str) -> bool:
 
 async def _translate_google(client: httpx.AsyncClient, text: str,
                             target: str = "zh-CN") -> Optional[str]:
-    try:
-        params = {"client": "gtx", "sl": "auto", "tl": target, "dt": "t", "q": text}
-        resp = await client.get(GOOGLE_URL, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        # data[0] = [[translated_seg, original_seg, ...], ...]
-        parts = []
-        for seg in data[0]:
-            if seg and seg[0]:
-                parts.append(seg[0])
-        return "".join(parts).strip() or None
-    except Exception as e:
-        print(f"[Translator] Google 翻译失败: {e}")
-        return None
+    params = {"client": "gtx", "sl": "auto", "tl": target, "dt": "t", "q": text}
+    resp = await client.get(GOOGLE_URL, params=params, timeout=12)
+    # 限流 / 服务端错误 -> 抛可重试异常，交给上层退避重试
+    if resp.status_code == 429 or resp.status_code >= 500:
+        raise TransientError(f"google {resp.status_code}")
+    resp.raise_for_status()
+    data = resp.json()
+    # data[0] = [[translated_seg, original_seg, ...], ...]
+    parts = []
+    for seg in data[0]:
+        if seg and seg[0]:
+            parts.append(seg[0])
+    return "".join(parts).strip() or None
 
 
 async def _translate_mymemory(client: httpx.AsyncClient, text: str) -> Optional[str]:
-    try:
-        params = {"q": text, "langpair": "en|zh-CN"}
-        resp = await client.get(MYMEMORY_URL, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        t = data.get("responseData", {}).get("translatedText")
-        # MyMemory 偶尔返回错误信息
-        if t and "MYMEMORY WARNING" not in t.upper():
-            return t.strip() or None
-        return None
-    except Exception as e:
-        print(f"[Translator] MyMemory 翻译失败: {e}")
-        return None
+    params = {"q": text, "langpair": "en|zh-CN"}
+    resp = await client.get(MYMEMORY_URL, params=params, timeout=12)
+    if resp.status_code == 429 or resp.status_code >= 500:
+        raise TransientError(f"mymemory {resp.status_code}")
+    resp.raise_for_status()
+    data = resp.json()
+    # MyMemory 配额耗尽时会在 responseDetails 里提示
+    details = (data.get("responseDetails") or "").upper()
+    if "LIMIT" in details or "QUOTA" in details:
+        raise TransientError("mymemory quota")
+    t = data.get("responseData", {}).get("translatedText")
+    # MyMemory 偶尔返回错误信息
+    if t and "MYMEMORY WARNING" not in t.upper():
+        return t.strip() or None
+    return None
 
 
 async def translate_text(client: httpx.AsyncClient, text: str,
                          target: str = "zh-CN") -> str:
-    """翻译单段文本为中文。已是中文则原样返回。失败返回原文。"""
+    """
+    翻译单段文本为中文。已是中文则原样返回。
+    失败(限流/超时)时退避重试，全部轮次失败才返回原文。
+    """
     if not text or not text.strip():
         return text
     if is_mostly_chinese(text):
@@ -92,16 +106,31 @@ async def translate_text(client: httpx.AsyncClient, text: str,
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
+    result = None
     async with _SEMAPHORE:
-        # 主源 Google
-        result = await _translate_google(client, text, target)
-        # 备源 MyMemory
-        if not result or not result.strip():
-            await asyncio.sleep(0.15)
-            result = await _translate_mymemory(client, text)
-        # 都失败：返回原文
-        if not result:
-            result = text
+        for attempt in range(MAX_ATTEMPTS):
+            # 每轮依次尝试主源 / 备源
+            for name, fn in (("google", _translate_google),
+                             ("mymemory", _translate_mymemory)):
+                try:
+                    r = await fn(client, text, target)
+                    if r and r.strip():
+                        result = r
+                        break
+                except TransientError as e:
+                    print(f"[Translator] {name} 暂时不可用({e})，第 {attempt + 1} 轮")
+                except Exception as e:
+                    print(f"[Translator] {name} 翻译异常: {e}")
+            if result:
+                break
+            # 本轮全部失败 -> 指数退避 + 抖动，避免集体撞限流
+            if attempt < MAX_ATTEMPTS - 1:
+                wait = 0.6 * (2 ** attempt) + random.uniform(0, 0.5)
+                await asyncio.sleep(wait)
+
+    # 都失败：返回原文（调用方据此判断"未真正翻译"，允许后续重试）
+    if not result:
+        result = text
 
     # 清理：Google 偶尔在中文末尾带多余空格
     result = re.sub(r"\s{2,}", " ", result).strip()
@@ -125,18 +154,24 @@ async def translate_article(client: httpx.AsyncClient, art: dict) -> dict:
     why_hot = art.get("why_hot", "") or ""
     takeaway = art.get("takeaway", "") or ""
 
+    title_is_zh = is_mostly_chinese(title)
+
     # 若标题已基本是中文，整体跳过（种子数据等）
-    if is_mostly_chinese(title) and is_mostly_chinese(summary):
+    if title_is_zh and is_mostly_chinese(summary):
         _DONE_URLS.add(url)
         return art
 
     # 保留原文（仅当原文非空且确有英文/非中文内容时）
-    if not is_mostly_chinese(title):
+    # ok 标记"标题是否已确认为中文"——标题是判定翻译成功的关键字段，
+    # 只有标题到位才标记完成，否则留给后续周期重试（防止限流时永久漏译）
+    ok = title_is_zh
+    if not title_is_zh:
         translated_title = await translate_text(client, title)
         # 仅当实际发生翻译（结果与原文不同）才记录原文，避免中文被误存为"原文"
         if translated_title and translated_title != title:
             art["original_title"] = title
             art["title"] = translated_title
+            ok = True
     if summary and not is_mostly_chinese(summary):
         translated_summary = await translate_text(client, summary)
         if translated_summary and translated_summary != summary:
@@ -153,7 +188,8 @@ async def translate_article(client: httpx.AsyncClient, art: dict) -> dict:
             art["takeaway"] = t
 
     art["language"] = "zh"
-    _DONE_URLS.add(url)
+    if ok:
+        _DONE_URLS.add(url)
     return art
 
 
@@ -162,7 +198,8 @@ async def translate_articles(articles: list,
                               on_progress=None) -> int:
     """
     批量翻译文章列表（就地修改）。
-    并发限流 + 失败降级。返回实际翻译（非跳过）的篇数。
+    并发限流 + 失败降级 + 分批退避。
+    返回**真正翻译成功**的篇数（含原本就是中文而跳过的）。
     """
     if not articles:
         return 0
@@ -174,24 +211,31 @@ async def translate_articles(articles: list,
         # 仅统计需要翻译的
         need = [a for a in articles
                 if not is_mostly_chinese((a.get("title") or ""))]
-        done = 0
         total = len(need)
 
-        # 分批并发：每批 6 条
-        BATCH = 6
+        # 分批并发：每批 3 条（配合 semaphore=3，降低触发 429 的概率）
+        BATCH = 3
+        succeeded = 0
         for i in range(0, total, BATCH):
             batch = need[i:i + BATCH]
             await asyncio.gather(
                 *(translate_article(client, a) for a in batch),
                 return_exceptions=True,
             )
-            done += len(batch)
+            succeeded += sum(
+                1 for a in batch
+                if is_mostly_chinese(a.get("title") or "")
+            )
             if on_progress:
-                on_progress(done, total)
-            # 批间小延迟，降低被限流概率
-            await asyncio.sleep(0.1)
+                on_progress(min(i + BATCH, total), total)
+            # 批间退避 + 抖动；每 10 批多歇一会，给限流窗口留出恢复时间
+            if i + BATCH < total:
+                if (i // BATCH) % 10 == 9:
+                    await asyncio.sleep(2.0)
+                else:
+                    await asyncio.sleep(0.35 + random.uniform(0, 0.25))
 
-        return done
+        return succeeded
     finally:
         if own_client:
             await client.aclose()

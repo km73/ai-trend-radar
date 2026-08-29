@@ -9,6 +9,7 @@ import hmac
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Optional
 
 import httpx
 from fastapi import FastAPI, Query, Request, BackgroundTasks
@@ -33,6 +34,10 @@ from seed_data import SEED_ARTICLES
 GATE_PASSWORD = os.environ.get("GATE_PASSWORD", "Anson2026")
 GATE_SECRET = os.environ.get("GATE_SECRET", "ai-radar-gate-secret-2026")
 AUTH_COOKIE = "radar_auth"
+
+# 后台任务节奏（分钟）；限流时每轮补译上限
+REFRESH_INTERVAL_MIN = int(os.environ.get("REFRESH_INTERVAL_MIN", "20"))
+TRANSLATE_BATCH_LIMIT = int(os.environ.get("TRANSLATE_BATCH_LIMIT", "60"))
 
 
 def _make_token() -> str:
@@ -161,30 +166,56 @@ async def lifespan(app: FastAPI):
 
 
 async def background_refresh(initial_backfill: bool = False):
-    """后台异步抓取 + 翻译，不阻塞启动"""
-    try:
-        await asyncio.sleep(2)  # 等服务先起来
+    """
+    常驻后台任务：
+      1) 启动时先回填历史英文文章翻译
+      2) 立即抓取一轮
+      3) 之后每 REFRESH_INTERVAL_MIN 分钟抓取一轮，并周期性重试漏译文章
+    任何一轮异常都不影响后续轮次。
+    """
+    await asyncio.sleep(2)  # 等服务先起来
 
-        # 启动时先回填历史未翻译文章
-        if initial_backfill:
+    # 启动时先回填历史未翻译文章
+    if initial_backfill:
+        try:
             await backfill_translations()
+        except Exception as e:
+            print(f"[App] 初始回填失败: {e}")
 
-        result = await scraper.fetch_all_sources()
-        if result["articles"]:
-            scored = scorer.score_all_articles(result["articles"])
-            # 仅翻译新增（DB 不存在的）文章
-            await _translate_new_only(scored)
-            db.bulk_upsert(scored)
-            db.set_meta("last_refresh", datetime.now(timezone.utc).isoformat())
-            print(f"[App] 后台抓取完成: 处理 {len(scored)} 条")
-    except Exception as e:
-        print(f"[App] 后台抓取失败: {e}")
+    # 立即跑一轮抓取
+    await do_refresh()
+
+    cycle = 0
+    while True:
+        await asyncio.sleep(REFRESH_INTERVAL_MIN * 60)
+        cycle += 1
+        try:
+            await do_refresh()
+            # 每轮都补译漏网文章（限流时不硬冲，每轮限量）
+            await backfill_translations(limit=TRANSLATE_BATCH_LIMIT)
+        except Exception as e:
+            print(f"[App] 第 {cycle} 轮后台任务失败: {e}")
 
 
-async def backfill_translations() -> int:
-    """回填 DB 中历史英文文章的翻译"""
+async def do_refresh() -> int:
+    """抓取一轮 + 翻译新增 + 落库。返回入库条数。"""
+    result = await scraper.fetch_all_sources()
+    if not result.get("articles"):
+        print("[App] 本轮未抓到内容")
+        return 0
+    scored = scorer.score_all_articles(result["articles"])
+    # 仅翻译新增（DB 不存在的）文章
+    await _translate_new_only(scored)
+    db.bulk_upsert(scored)
+    db.set_meta("last_refresh", datetime.now(timezone.utc).isoformat())
+    print(f"[App] 抓取完成: 处理 {len(scored)} 条")
+    return len(scored)
+
+
+async def backfill_translations(limit: Optional[int] = None) -> int:
+    """回填 DB 中历史英文文章的翻译（limit 用于限流时每轮限量重试）"""
     try:
-        pending = db.untranslated_articles()
+        pending = db.untranslated_articles(limit=limit)
         if not pending:
             print("[App] 无需回填翻译（全部已中文化）")
             return 0
@@ -194,6 +225,9 @@ async def backfill_translations() -> int:
         # 逐条写回
         written = 0
         for art in pending:
+            # 只有标题确实变成中文才写回，避免把未译成功的内容误标为已译
+            if not translator.is_mostly_chinese(art.get("title") or ""):
+                continue
             ok = db.update_translation(
                 art["id"], art.get("title", ""), art.get("summary", ""),
                 art.get("why_hot", ""), art.get("takeaway", ""),

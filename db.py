@@ -162,10 +162,11 @@ def existing_urls(urls: list) -> set:
         return result
 
 
-def untranslated_articles() -> list:
+def untranslated_articles(limit: Optional[int] = None) -> list:
     """
     返回需要回填翻译的文章：
     original_title 为空 且 标题不以中文为主（含拉丁字母但中文占比低）。
+    limit 用于限流时每轮限量重试。
     """
     def mostly_zh(text: str) -> bool:
         if not text:
@@ -176,11 +177,15 @@ def untranslated_articles() -> list:
             return True
         return zh / effective > 0.3
 
+    sql = """
+        SELECT * FROM articles
+        WHERE original_title IS NULL
+        ORDER BY hot_score DESC
+    """
+    if limit:
+        sql += f" LIMIT {int(limit)}"
     with get_db() as conn:
-        rows = conn.execute("""
-            SELECT * FROM articles
-            WHERE original_title IS NULL
-        """).fetchall()
+        rows = conn.execute(sql).fetchall()
         out = []
         for r in rows:
             d = dict(r)
