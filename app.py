@@ -188,6 +188,12 @@ async def background_refresh(initial_backfill: bool = False):
     except Exception as e:
         print(f"[App] 首轮抓取失败: {e}")
 
+    # 首轮抓取后立即开始补译（渐进式：失败自动退避+熔断，下轮再试）
+    try:
+        await backfill_translations(limit=TRANSLATE_BATCH_LIMIT)
+    except Exception as e:
+        print(f"[App] 首轮补译失败: {e}")
+
     cycle = 0
     while True:
         await asyncio.sleep(REFRESH_INTERVAL_MIN * 60)
